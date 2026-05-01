@@ -59,7 +59,7 @@ Only continue when `can0` is `UP` and bitrate is `1000000`.
 Use this path for a fresh Linux machine or VM.
 
 ```bash
-git clone <your-repo-url>
+git clone git@github.com:PiperArm-EmbodiedAI/PiperControlPanel.git
 cd PiperArm
 bash scripts/install_system_deps.sh
 ```
