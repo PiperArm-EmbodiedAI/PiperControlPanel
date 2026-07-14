@@ -5,7 +5,9 @@ MODE="${1:-mock}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
-if [[ -x "/home/leeviy/miniconda3/envs/PiperArm/bin/python" ]]; then
+if [[ -x "/home/dig/anaconda3/envs/piper_tool/bin/python" ]]; then
+  PYTHON_BIN="/home/dig/anaconda3/envs/piper_tool/bin/python"
+elif [[ -x "/home/leeviy/miniconda3/envs/PiperArm/bin/python" ]]; then
   PYTHON_BIN="/home/leeviy/miniconda3/envs/PiperArm/bin/python"
 fi
 

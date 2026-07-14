@@ -179,6 +179,37 @@ class PiperGuiViewModel:
             f"linkage_offset=0x{linkage_offset:02X}"
         )
 
+    def probe_and_configure_sdk_feedback(self) -> CommandResult:
+        result = self.session.probe_and_configure_sdk_feedback()
+        before = result["before"]
+        after = result["after"]
+        return CommandResult(
+            "SDK direct endpose probe/config: "
+            f"configured_default_output={result['configured_default_output']} "
+            f"config_error={result['config_error']} "
+            f"before_endpose_nonzero={before['endpose_nonzero']} "
+            f"after_endpose_nonzero={after['endpose_nonzero']} "
+            f"before_status_timestamp={before['status_timestamp']:.6f} "
+            f"after_status_timestamp={after['status_timestamp']:.6f} "
+            f"before_joint={before['joint_values']} "
+            f"after_joint={after['joint_values']} "
+            f"before_endpose={before['endpose_values']} "
+            f"after_endpose={after['endpose_values']}"
+        )
+
+    def auto_identify_feedback_ids(self) -> CommandResult:
+        result = self.session.auto_identify_feedback_ids()
+        before = result["detected_before"]
+        after = result["detected_after"]
+        probe_after = result["direct_probe"]["after"]
+        return CommandResult(
+            "Feedback ID auto-identify: "
+            f"before={before} "
+            f"after={after} "
+            f"direct_endpose_after={probe_after['endpose_values']} "
+            f"direct_endpose_nonzero_after={probe_after['endpose_nonzero']}"
+        )
+
     def read_state(self) -> GuiState:
         return GuiState.from_robot_state(self.session.connected, self.session.read_state())
 
