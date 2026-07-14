@@ -119,7 +119,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(root)
 
         title_row = QHBoxLayout()
-        title_label = QLabel("PiperArm Control Tool V1.0")
+        title_label = QLabel("PiperArm Control Tool V1.1")
         title_label.setStyleSheet("font-size: 18px; font-weight: 600;")
         byline_label = QLabel("by LHM")
         byline_label.setStyleSheet("color: #666666;")
@@ -320,6 +320,16 @@ class MainWindow(QMainWindow):
             layout.addLayout(grid)
         else:
             layout.addWidget(QLabel("Offsets use safe default: feedback=0x00, control=0x00, linkage=0x00"))
+
+        identify_button = QPushButton("Auto Identify Feedback IDs")
+        identify_button.clicked.connect(self._run_async_command(self.view_model.auto_identify_feedback_ids))
+        self._buttons_disabled_while_running.append(identify_button)
+        layout.addWidget(identify_button)
+
+        probe_button = QPushButton("Probe Direct SDK EndPose / Restore Default IDs")
+        probe_button.clicked.connect(self._run_async_command(self.view_model.probe_and_configure_sdk_feedback))
+        self._buttons_disabled_while_running.append(probe_button)
+        layout.addWidget(probe_button)
 
         apply_button = QPushButton("Apply Master/Slave Config")
         apply_button.clicked.connect(self._run_async_command(self._apply_master_slave_config))

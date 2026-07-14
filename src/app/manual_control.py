@@ -79,3 +79,15 @@ class ManualControl:
         if not callable(writer):
             raise RuntimeError("Master/slave configuration is only available for drivers that implement configure_master_slave")
         writer(linkage_config, feedback_offset, ctrl_offset, linkage_offset)
+
+    def probe_and_configure_sdk_feedback(self) -> dict:
+        probe = getattr(self.driver, "probe_and_configure_sdk_feedback", None)
+        if not callable(probe):
+            raise RuntimeError("SDK feedback probing is only available for Piper drivers")
+        return probe()
+
+    def auto_identify_feedback_ids(self) -> dict:
+        identify = getattr(self.driver, "auto_identify_feedback_ids", None)
+        if not callable(identify):
+            raise RuntimeError("Feedback ID auto-identification is only available for Piper drivers")
+        return identify()

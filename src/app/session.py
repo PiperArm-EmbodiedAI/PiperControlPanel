@@ -135,6 +135,14 @@ class RobotSession:
         with self._lock:
             self.manual_control.configure_master_slave(linkage_config, feedback_offset, ctrl_offset, linkage_offset)
 
+    def probe_and_configure_sdk_feedback(self) -> dict:
+        with self._lock:
+            return self.manual_control.probe_and_configure_sdk_feedback()
+
+    def auto_identify_feedback_ids(self) -> dict:
+        with self._lock:
+            return self.manual_control.auto_identify_feedback_ids()
+
     def build_controller(self) -> Controller:
         return Controller(
             driver=self.driver,

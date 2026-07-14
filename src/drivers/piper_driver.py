@@ -225,6 +225,40 @@ class PiperDriver:
             raise RuntimeError("Piper SDK client does not provide MasterSlaveConfig")
         master_slave_config(linkage_config, feedback_offset, ctrl_offset, linkage_offset)
 
+    def probe_and_configure_sdk_feedback(self) -> dict[str, Any]:
+        self._ensure_connected()
+        before = self._direct_sdk_feedback_snapshot()
+        configured = False
+        config_error = None
+        master_slave_config = getattr(self.sdk_client, "MasterSlaveConfig", None)
+        if callable(master_slave_config):
+            try:
+                master_slave_config(0xFC, 0x00, 0x00, 0x00)
+                configured = True
+                time.sleep(0.5)
+            except Exception as exc:
+                config_error = str(exc)
+        after = self._direct_sdk_feedback_snapshot()
+        return {
+            "configured_default_output": configured,
+            "config_error": config_error,
+            "before": before,
+            "after": after,
+        }
+
+    def auto_identify_feedback_ids(self) -> dict[str, Any]:
+        self._ensure_connected()
+        before_ids = self._capture_feedback_id_counts()
+        probe = self.probe_and_configure_sdk_feedback()
+        after_ids = self._capture_feedback_id_counts()
+        return {
+            "before_ids": before_ids,
+            "after_ids": after_ids,
+            "detected_before": self._classify_feedback_ids(before_ids),
+            "detected_after": self._classify_feedback_ids(after_ids),
+            "direct_probe": probe,
+        }
+
     def open_gripper(self) -> None:
         state = self.get_state()
         self.send_action(Action(joint_position=state.joint_position, gripper_position=self.gripper_open_value))
@@ -232,6 +266,79 @@ class PiperDriver:
     def close_gripper(self) -> None:
         state = self.get_state()
         self.send_action(Action(joint_position=state.joint_position, gripper_position=self.gripper_closed_value))
+
+    def _capture_feedback_id_counts(self, seconds: float = 0.5) -> dict[str, int]:
+        try:
+            import can
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("python-can is required to identify feedback IDs") from exc
+        bus = can.interface.Bus(channel=self.can_interface, interface="socketcan")
+        counts: dict[int, int] = {}
+        deadline = time.monotonic() + max(float(seconds), 0.1)
+        try:
+            while time.monotonic() < deadline:
+                msg = bus.recv(timeout=0.05)
+                if msg is None:
+                    continue
+                arbitration_id = int(msg.arbitration_id)
+                counts[arbitration_id] = counts.get(arbitration_id, 0) + 1
+        finally:
+            shutdown = getattr(bus, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+        return {f"0x{arbitration_id:X}": count for arbitration_id, count in sorted(counts.items())}
+
+    def _classify_feedback_ids(self, counts: dict[str, int]) -> dict[str, Any]:
+        seen = {int(key, 16) for key in counts}
+        default_endpose = {0x2A2, 0x2A3, 0x2A4}
+        default_joint = {0x2A5, 0x2A6, 0x2A7}
+        offset_2b = set(range(0x2B1, 0x2B9))
+        offset_2c = set(range(0x2C1, 0x2C9))
+        high_spd = set(range(0x251, 0x257))
+        low_spd = set(range(0x261, 0x267))
+        return {
+            "default_endpose_complete": default_endpose <= seen,
+            "default_joint_complete": default_joint <= seen,
+            "offset_2b_seen": bool(seen & offset_2b),
+            "offset_2c_seen": bool(seen & offset_2c),
+            "high_speed_driver_feedback_complete": high_spd <= seen,
+            "low_speed_driver_feedback_complete": low_spd <= seen,
+            "ids_seen": sorted(counts),
+        }
+
+    def _direct_sdk_feedback_snapshot(self) -> dict[str, Any]:
+        joint_feedback = self._call_optional_sdk("GetArmJointMsgs")
+        endpose_feedback = self._call_optional_sdk("GetArmEndPoseMsgs")
+        status_feedback = self._call_optional_sdk("GetArmStatus")
+        joint_state = getattr(joint_feedback, "joint_state", joint_feedback)
+        end_pose = getattr(endpose_feedback, "end_pose", endpose_feedback)
+        joint_values = self._sdk_joint_values(joint_state)
+        endpose_values = self._sdk_endpose_values(end_pose)
+        status_timestamp = self._feedback_timestamp(status_feedback) if status_feedback is not None else 0.0
+        return {
+            "joint_values": joint_values,
+            "joint_nonzero": any(value != 0 for value in joint_values),
+            "endpose_values": endpose_values,
+            "endpose_nonzero": any(value != 0 for value in endpose_values),
+            "status_timestamp": status_timestamp,
+        }
+
+    def _call_optional_sdk(self, name: str) -> Any | None:
+        method = getattr(self.sdk_client, name, None)
+        return method() if callable(method) else None
+
+    def _sdk_joint_values(self, joint_state: Any | None) -> list[int]:
+        if joint_state is None:
+            return [0] * 6
+        values = []
+        for index in range(1, 7):
+            values.append(int(getattr(joint_state, f"joint_{index}", 0)))
+        return values
+
+    def _sdk_endpose_values(self, end_pose: Any | None) -> list[int]:
+        if end_pose is None:
+            return [0] * 6
+        return [int(getattr(end_pose, name, 0)) for name in ("X_axis", "Y_axis", "Z_axis", "RX_axis", "RY_axis", "RZ_axis")]
 
     def _read_raw_state(self) -> Any:
         if self.state_reader is not None:
