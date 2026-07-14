@@ -17,6 +17,14 @@ class GuiState:
     gripper_position: float
     error_code: int | None
     end_pose: list[float] | None
+    ctrl_mode: int = 0
+    arm_status: int = 0
+    mode_feedback: int = 0
+    teach_status: int = 0
+    motion_status: int = 0
+    trajectory_num: int = 0
+    joint_limit_flags: list[bool] = field(default_factory=lambda: [False] * 6)
+    joint_communication_flags: list[bool] = field(default_factory=lambda: [False] * 6)
 
     @classmethod
     def from_robot_state(cls, connected: bool, state: RobotState) -> "GuiState":
@@ -27,6 +35,14 @@ class GuiState:
             gripper_position=state.gripper_position,
             error_code=state.error_code,
             end_pose=list(state.end_pose) if state.end_pose is not None else None,
+            ctrl_mode=state.ctrl_mode,
+            arm_status=state.arm_status,
+            mode_feedback=state.mode_feedback,
+            teach_status=state.teach_status,
+            motion_status=state.motion_status,
+            trajectory_num=state.trajectory_num,
+            joint_limit_flags=list(state.joint_limit_flags),
+            joint_communication_flags=list(state.joint_communication_flags),
         )
 
 

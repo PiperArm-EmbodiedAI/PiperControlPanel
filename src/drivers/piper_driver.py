@@ -112,6 +112,12 @@ class PiperDriver:
         else:
             raise RuntimeError("No compatible stop method found on Piper SDK client")
 
+    def start_drag_teach(self) -> None:
+        self._send_drag_teach_control(0x01)
+
+    def stop_drag_teach(self) -> None:
+        self._send_drag_teach_control(0x02)
+
     def reset(self) -> None:
         self._ensure_connected()
         emergency_stop = getattr(self.sdk_client, "EmergencyStop", None)
@@ -134,7 +140,7 @@ class PiperDriver:
 
     def send_action(self, action: Action) -> None:
         self._ensure_connected()
-        if not self._enabled:
+        if not self._hardware_enabled():
             raise RuntimeError("Robot must be enabled before sending actions")
         if self.action_writer is not None:
             self.action_writer(action)
@@ -159,22 +165,50 @@ class PiperDriver:
             return
         raise RuntimeError("No action writer available for Piper driver")
 
+    def send_joint_positions(self, joint_position: list[float] | tuple[float, ...]) -> None:
+        self._ensure_connected()
+        if not self._hardware_enabled():
+            raise RuntimeError("Robot must be enabled before sending joint positions")
+        if len(joint_position) != 6 or any(not math.isfinite(float(value)) for value in joint_position):
+            raise ValueError("Joint position must contain six finite values")
+        motion_ctrl = getattr(self.sdk_client, "MotionCtrl_2", None)
+        joint_ctrl = getattr(self.sdk_client, "JointCtrl", None)
+        if not callable(motion_ctrl) or not callable(joint_ctrl):
+            raise RuntimeError("No joint position writer available for Piper driver")
+        motion_ctrl(0x01, 0x01, self.move_speed_rate, 0x00, 0, 0x00)
+        joint_ctrl(*[self._radians_to_sdk_units(value) for value in joint_position])
+
     def send_cartesian_pose(self, x_mm: float, y_mm: float, z_mm: float, rx_deg: float, ry_deg: float, rz_deg: float) -> None:
         self._ensure_connected()
-        if not self._enabled:
+        if not self._hardware_enabled():
             raise RuntimeError("Robot must be enabled before sending cartesian pose")
+        values = (x_mm, y_mm, z_mm, rx_deg, ry_deg, rz_deg)
+        if any(not math.isfinite(float(value)) for value in values):
+            raise ValueError("Cartesian pose values must be finite")
+        sdk_values = tuple(int(round(float(value) * 1000.0)) for value in values)
+        mode_ctrl = getattr(self.sdk_client, "ModeCtrl", None)
         motion_ctrl = getattr(self.sdk_client, "MotionCtrl_2", None)
         end_pose_ctrl = getattr(self.sdk_client, "EndPoseCtrl", None)
-        if not callable(motion_ctrl) or not callable(end_pose_ctrl):
+        if not callable(end_pose_ctrl) or (not callable(mode_ctrl) and not callable(motion_ctrl)):
             raise RuntimeError("No cartesian pose writer available for Piper driver")
-        motion_ctrl(0x01, 0x00, self.move_speed_rate, 0x00, 0, 0x00)
-        end_pose_ctrl(
-            int(round(x_mm * 1000.0)),
-            int(round(y_mm * 1000.0)),
-            int(round(z_mm * 1000.0)),
-            int(round(rx_deg * 1000.0)),
-            int(round(ry_deg * 1000.0)),
-            int(round(rz_deg * 1000.0)),
+        if callable(mode_ctrl):
+            mode_ctrl(0x01, 0x00, self.move_speed_rate, 0x00)
+        else:
+            motion_ctrl(0x01, 0x00, self.move_speed_rate, 0x00, 0, 0x00)
+        end_pose_ctrl(*sdk_values)
+
+    def set_gripper_position(self, position: float) -> None:
+        self._ensure_connected()
+        if not self._hardware_enabled():
+            raise RuntimeError("Robot must be enabled before setting gripper")
+        gripper_ctrl = getattr(self.sdk_client, "GripperCtrl", None)
+        if not callable(gripper_ctrl):
+            raise RuntimeError("No gripper writer available for Piper driver")
+        gripper_ctrl(
+            gripper_angle=self._gripper_to_sdk_units(position),
+            gripper_effort=self._gripper_effort_to_sdk_units(self.gripper_effort_newton_meter),
+            gripper_code=0x01,
+            set_zero=0x00,
         )
 
     def configure_master_slave(
@@ -207,12 +241,21 @@ class PiperDriver:
             get_gripper_msgs = getattr(self.sdk_client, "GetArmGripperMsgs", None)
             get_status = getattr(self.sdk_client, "GetArmStatus", None)
             get_end_pose = getattr(self.sdk_client, "GetArmEndPoseMsgs", None)
+            get_enable_status = getattr(self.sdk_client, "GetArmEnableStatus", None)
+            joint_feedback = get_joint_msgs()
+            status_feedback = get_status() if callable(get_status) else None
+            end_pose_feedback = get_end_pose() if callable(get_end_pose) else None
             return {
-                "timestamp": time.time(),
-                "joint_feedback": get_joint_msgs(),
+                "timestamp": self._feedback_timestamp(
+                    joint_feedback,
+                    status_feedback,
+                    end_pose_feedback,
+                ),
+                "joint_feedback": joint_feedback,
                 "gripper_feedback": get_gripper_msgs() if callable(get_gripper_msgs) else None,
-                "status_feedback": get_status() if callable(get_status) else None,
-                "end_pose_feedback": get_end_pose() if callable(get_end_pose) else None,
+                "status_feedback": status_feedback,
+                "end_pose_feedback": end_pose_feedback,
+                "enable_feedback": get_enable_status() if callable(get_enable_status) else None,
             }
         reader = getattr(self.sdk_client, "get_state", None)
         if callable(reader):
@@ -227,23 +270,22 @@ class PiperDriver:
             gripper_feedback = raw_state.get("gripper_feedback")
             status_feedback = raw_state.get("status_feedback")
             end_pose_feedback = raw_state.get("end_pose_feedback")
+            enable_feedback = raw_state.get("enable_feedback")
             joint_state = getattr(joint_feedback, "joint_state", joint_feedback)
             gripper_state = getattr(gripper_feedback, "gripper_state", gripper_feedback)
-            status_state = getattr(status_feedback, "arm_status", status_feedback)
             end_pose_state = getattr(end_pose_feedback, "end_pose", end_pose_feedback)
             joint_position = [
                 self._sdk_units_to_radians(getattr(joint_state, f"joint_{index}"))
                 for index in range(1, 7)
             ]
             gripper_units = getattr(gripper_state, "grippers_angle", 0) if gripper_state is not None else 0
-            error_code = getattr(status_state, "err_code", None) if status_state is not None else None
             return RobotState(
                 timestamp=float(raw_state.get("timestamp", time.time())),
                 joint_position=joint_position,
                 gripper_position=self._sdk_gripper_to_normalized(gripper_units),
-                is_enabled=self._enabled,
-                error_code=error_code,
+                is_enabled=self._normalize_enable_feedback(enable_feedback),
                 end_pose=self._normalize_end_pose(end_pose_state),
+                **self._normalize_status_feedback(status_feedback),
             )
         if isinstance(raw_state, dict):
             return RobotState(
@@ -253,6 +295,16 @@ class PiperDriver:
                 is_enabled=bool(raw_state.get("is_enabled", self._enabled)),
                 error_code=raw_state.get("error_code"),
                 end_pose=raw_state.get("end_pose"),
+                ctrl_mode=raw_state.get("ctrl_mode", 0),
+                arm_status=raw_state.get("arm_status", 0),
+                mode_feedback=raw_state.get("mode_feedback", raw_state.get("mode_feed", 0)),
+                teach_status=raw_state.get("teach_status", 0),
+                motion_status=raw_state.get("motion_status", 0),
+                trajectory_num=raw_state.get("trajectory_num", 0),
+                joint_limit_flags=list(raw_state.get("joint_limit_flags", [False] * 6)),
+                joint_communication_flags=list(
+                    raw_state.get("joint_communication_flags", [False] * 6)
+                ),
             )
         joint_position = getattr(raw_state, "joint_position", [0.0] * 6)
         gripper_position = getattr(raw_state, "gripper_position", 0.0)
@@ -267,7 +319,85 @@ class PiperDriver:
             is_enabled=bool(is_enabled),
             error_code=error_code,
             end_pose=end_pose,
+            ctrl_mode=getattr(raw_state, "ctrl_mode", 0),
+            arm_status=getattr(raw_state, "arm_status", 0),
+            mode_feedback=getattr(raw_state, "mode_feedback", getattr(raw_state, "mode_feed", 0)),
+            teach_status=getattr(raw_state, "teach_status", 0),
+            motion_status=getattr(raw_state, "motion_status", 0),
+            trajectory_num=getattr(raw_state, "trajectory_num", 0),
+            joint_limit_flags=list(getattr(raw_state, "joint_limit_flags", [False] * 6)),
+            joint_communication_flags=list(
+                getattr(raw_state, "joint_communication_flags", [False] * 6)
+            ),
         )
+
+    def _feedback_timestamp(self, *feedback_values: Any | None) -> float:
+        timestamps = []
+        for feedback in feedback_values:
+            value = getattr(feedback, "time_stamp", None)
+            if value is None:
+                value = getattr(feedback, "timestamp", None)
+            if value is None:
+                continue
+            parsed = float(value)
+            if not math.isfinite(parsed) or parsed <= 0.0:
+                return 0.0
+            timestamps.append(parsed)
+        return min(timestamps) if timestamps else 0.0
+
+    def _normalize_enable_feedback(self, enable_feedback: Any | None) -> bool:
+        if enable_feedback is None:
+            return self._enabled
+        try:
+            values = list(enable_feedback)
+        except TypeError:
+            return False
+        return len(values) == 6 and all(bool(value) for value in values)
+
+    def _hardware_enabled(self) -> bool:
+        get_enable_status = getattr(self.sdk_client, "GetArmEnableStatus", None)
+        if not callable(get_enable_status):
+            return self._enabled
+        return self._enabled and self._normalize_enable_feedback(get_enable_status())
+
+    def _normalize_status_feedback(self, status_feedback: Any | None) -> dict[str, Any]:
+        status_state = status_feedback
+        nested_status = getattr(status_feedback, "arm_status", None)
+        if nested_status is not None:
+            status_state = nested_status
+        if status_state is None:
+            return {}
+
+        err_status = getattr(status_state, "err_status", None)
+        return {
+            "error_code": self._status_int(status_state, "err_code", default=None),
+            "ctrl_mode": self._status_int(status_state, "ctrl_mode"),
+            "arm_status": self._status_int(status_state, "arm_status"),
+            "mode_feedback": self._status_int(status_state, "mode_feed", "mode_feedback"),
+            "teach_status": self._status_int(status_state, "teach_status"),
+            "motion_status": self._status_int(status_state, "motion_status"),
+            "trajectory_num": self._status_int(status_state, "trajectory_num"),
+            "joint_limit_flags": [
+                bool(getattr(err_status, f"joint_{index}_angle_limit", False))
+                for index in range(1, 7)
+            ],
+            "joint_communication_flags": [
+                bool(getattr(err_status, f"communication_status_joint_{index}", False))
+                for index in range(1, 7)
+            ],
+        }
+
+    def _status_int(
+        self,
+        status_state: Any,
+        *attribute_names: str,
+        default: int | None = 0,
+    ) -> int | None:
+        for attribute_name in attribute_names:
+            value = getattr(status_state, attribute_name, None)
+            if value is not None:
+                return int(value)
+        return default
 
     def _normalize_end_pose(self, end_pose_state: Any | None) -> list[float] | None:
         if end_pose_state is None:
@@ -319,6 +449,17 @@ class PiperDriver:
         ):
             if value not in (0x00, 0x10, 0x20):
                 raise ValueError(f"{name} must be one of 0x00, 0x10, or 0x20")
+
+    def _send_drag_teach_control(self, control: int) -> None:
+        self._ensure_connected()
+        motion_ctrl = getattr(self.sdk_client, "MotionCtrl_1", None)
+        if not callable(motion_ctrl):
+            raise RuntimeError("Piper SDK client does not provide MotionCtrl_1")
+        motion_ctrl(
+            emergency_stop=0x00,
+            track_ctrl=0x00,
+            grag_teach_ctrl=control,
+        )
 
     def _ensure_connected(self) -> None:
         if not self._connected:

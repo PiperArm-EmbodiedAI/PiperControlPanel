@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import time
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any
@@ -61,20 +63,24 @@ class RobotSession:
     def disconnect(self) -> None:
         with self._lock:
             shutdown = self.factory.robot_config.get("shutdown", {})
-            if self._connected and shutdown.get("stop_on_exit", False):
-                self.driver.stop()
-            if self._connected and shutdown.get("auto_disable", True):
-                try:
-                    self.driver.disable()
-                except Exception:
-                    pass
-            close = getattr(self.driver, "close", None)
-            disconnect = getattr(self.driver, "disconnect", None)
-            if callable(close):
-                close()
-            elif callable(disconnect):
-                disconnect()
-            self._connected = False
+            pending_error: Exception | None = None
+            try:
+                if self._connected and shutdown.get("stop_on_exit", False):
+                    self.driver.stop()
+                elif self._connected and shutdown.get("auto_disable", True):
+                    self._park_and_disable()
+            except Exception as exc:
+                pending_error = exc
+            finally:
+                close = getattr(self.driver, "close", None)
+                disconnect = getattr(self.driver, "disconnect", None)
+                if callable(close):
+                    close()
+                elif callable(disconnect):
+                    disconnect()
+                self._connected = False
+            if pending_error is not None:
+                raise pending_error
 
     def close(self) -> None:
         self.disconnect()
@@ -85,7 +91,7 @@ class RobotSession:
 
     def disable(self) -> None:
         with self._lock:
-            self.driver.disable()
+            self._park_and_disable()
 
     def stop(self) -> None:
         with self._lock:
@@ -137,6 +143,57 @@ class RobotSession:
             camera_driver=self.camera_driver,
             prompt=self.factory.policy_config.get("prompt"),
         )
+
+    def _park_and_disable(self) -> None:
+        park = self.factory.robot_config.get("shutdown", {}).get("park", {})
+        rest_degrees = park.get("joint_position_deg", [-90.0, 0.0, 0.0, 0.0, 40.0, 0.0])
+        if len(rest_degrees) != 6 or any(not math.isfinite(float(value)) for value in rest_degrees):
+            raise ValueError("shutdown.park.joint_position_deg must contain six finite values")
+        target = [math.radians(float(value)) for value in rest_degrees]
+        tolerance = math.radians(float(park.get("tolerance_deg", 2.0)))
+        stable_samples_required = int(park.get("stable_samples", 3))
+        timeout_s = float(park.get("timeout_s", 45.0))
+        poll_interval_s = float(park.get("poll_interval_s", 0.05))
+        if tolerance < 0.0 or stable_samples_required < 1 or timeout_s <= 0.0 or poll_interval_s < 0.0:
+            raise ValueError("shutdown.park timing, stability, and tolerance values are invalid")
+
+        state = self.manual_control.read_state()
+        if not state.is_enabled:
+            return
+        self._validate_park_feedback(state, previous_timestamp=None)
+        previous_timestamp = state.timestamp
+        started = time.monotonic()
+        stable_samples = 0
+
+        while time.monotonic() - started <= timeout_s:
+            self.manual_control.send_joint_action(target, state.gripper_position)
+            if poll_interval_s:
+                time.sleep(poll_interval_s)
+            state = self.manual_control.read_state()
+            self._validate_park_feedback(state, previous_timestamp)
+            previous_timestamp = state.timestamp
+            if all(abs(actual - desired) <= tolerance for actual, desired in zip(state.joint_position, target)):
+                stable_samples += 1
+                if stable_samples >= stable_samples_required:
+                    self.driver.disable()
+                    return
+            else:
+                stable_samples = 0
+        raise RuntimeError("Park timed out before target stability was confirmed; motors remain enabled")
+
+    def _validate_park_feedback(self, state: RobotState, previous_timestamp: float | None) -> None:
+        if not math.isfinite(state.timestamp) or state.timestamp <= 0.0:
+            raise RuntimeError("Park feedback timestamp is invalid; motors remain enabled")
+        if previous_timestamp is not None and state.timestamp <= previous_timestamp:
+            raise RuntimeError("Park feedback did not advance; motors remain enabled")
+        if not state.is_enabled:
+            raise RuntimeError("Motor enable feedback was lost while parking; disable was not sent")
+        if state.error_code not in (None, 0):
+            raise RuntimeError(f"Robot fault {state.error_code} while parking; motors remain enabled")
+        if any(state.joint_communication_flags):
+            raise RuntimeError("Joint communication fault while parking; motors remain enabled")
+        if any(state.joint_limit_flags):
+            raise RuntimeError("Joint limit fault while parking; motors remain enabled")
 
     def __enter__(self) -> "RobotSession":
         self.connect()

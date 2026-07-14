@@ -44,6 +44,7 @@ class AppFactory:
                 auto_enable=self.robot_config["auto_enable"],
                 gripper_open_value=self.robot_config["gripper"]["open"],
                 gripper_closed_value=self.robot_config["gripper"]["closed"],
+                move_speed_rate=self.robot_config.get("move_speed_rate", 30),
             )
         raise ValueError(f"Unsupported mode: {resolved_mode}")
 

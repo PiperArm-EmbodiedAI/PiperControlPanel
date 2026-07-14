@@ -142,7 +142,7 @@ class MainWindow(QMainWindow):
             ("Connect", self._run_command(self.view_model.connect), False),
             ("Disconnect", self._run_command(self.view_model.disconnect), False),
             ("Enable", self._run_command(self.view_model.enable), False),
-            ("Disable motors", self._run_command(self.view_model.disable), False),
+            ("Disable motors", self._run_async_command(self.view_model.disable), True),
             ("Emergency stop", self._run_command(self.view_model.stop), False),
             ("Reset fault", self._run_command(self.view_model.reset_fault), False),
             ("Home target", self._run_async_command(self._send_home), True),

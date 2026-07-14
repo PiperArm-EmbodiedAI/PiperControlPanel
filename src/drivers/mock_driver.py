@@ -77,6 +77,14 @@ class MockDriver:
             is_enabled=self._state.is_enabled,
             error_code=self._state.error_code,
             end_pose=list(self._state.end_pose) if self._state.end_pose is not None else None,
+            ctrl_mode=self._state.ctrl_mode,
+            arm_status=self._state.arm_status,
+            mode_feedback=self._state.mode_feedback,
+            teach_status=self._state.teach_status,
+            motion_status=self._state.motion_status,
+            trajectory_num=self._state.trajectory_num,
+            joint_limit_flags=list(self._state.joint_limit_flags),
+            joint_communication_flags=list(self._state.joint_communication_flags),
         )
 
     def send_action(self, action: Action) -> None:

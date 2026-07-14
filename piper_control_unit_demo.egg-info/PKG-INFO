@@ -19,105 +19,383 @@ Provides-Extra: dev
 Requires-Dist: pytest<9.0,>=8.2; extra == "dev"
 Requires-Dist: ruff<1.0,>=0.6; extra == "dev"
 
-# piper-control-unit-demo
+# PiperArm Control Tool
 
-A modular real-robot control unit for Piper arm, designed to decouple low-level robot control from policy inference, with both real-hardware mode and mock/demo mode.
+A Linux GUI and control-unit demo for the AgileX Piper arm. The project is designed for real-hardware manual control while keeping the core control interfaces independent from GUI, ROS, and future VLA/policy deployments.
 
-## Scope
-- Connect to a real Piper arm from Ubuntu 20
-- Read robot state
-- Send joint and gripper actions
-- Run actions through a pluggable policy interface
-- Support both `real` and `mock` modes
+Author: LiHaoming
 
-## Non-goals
-- No ROS1 inheritance as the main architecture
-- No full ROS2 package in v1
-- No training pipeline
-- No complex GUI as the main control architecture; the optional GUI is only an auxiliary manual tool
-- No Cartesian control as the main interface
+## System requirements
 
-## Repository layout
-- [config/](config/) runtime YAML files
-- [docs/](docs/) architecture and bring-up notes
-- [src/core/](src/core/) stable control interfaces
-- [src/drivers/](src/drivers/) robot and camera drivers
-- [src/policies/](src/policies/) mock and remote policy adapters
-- [src/app/](src/app/) shared session and manual-control application layer
-- [src/gui/](src/gui/) optional PySide6 manual control panel
-- [scripts/](scripts/) runnable demos
-- [tests/](tests/) mock and safety coverage
+Recommended environment:
 
-## Environment setup
-1. Miniconda is installed under `/home/leeviy/miniconda3`.
-2. Activate the environment:
-   - `source /home/leeviy/miniconda3/etc/profile.d/conda.sh`
-   - `conda activate PiperArm`
-3. Install dependencies:
-   - `pip install -r requirements.txt`
+- Linux with a graphical desktop session, VNC desktop, or SSH X11 forwarding.
+- Python 3.10.
+- Conda or Miniconda is recommended for reproducible installation.
+- SocketCAN-compatible USB-CAN adapter.
+- AgileX Piper arm and official `piper-sdk` Python package.
+- CAN bitrate: `1000000`.
 
-## Mock mode
-Run the full loop without hardware:
+The GUI cannot open in a pure SSH/TTY session without `DISPLAY`. For headless smoke tests only, use `QT_QPA_PLATFORM=offscreen`.
+
+## Important safety and CAN checklist
+
+Before real-hardware motion:
+
+1. Clear the robot workspace and keep people outside the arm reach envelope.
+2. Confirm the arm is securely mounted.
+3. Confirm you know how to use `Emergency stop` and `Disable motors` in the GUI.
+4. Initialize and verify CAN before clicking `Enable`.
+5. Do not move the robot if CAN state, bitrate, or feedback is abnormal.
+6. Start with small joint-space motions. Mock mode passing does not prove real-hardware safety.
+
+Find available CAN interfaces and USB bus information:
 
 ```bash
-source /home/leeviy/miniconda3/etc/profile.d/conda.sh
-conda activate PiperArm
-cd /home/leeviy/Desktop/PiperArm
-python scripts/run_policy_loop.py --mode mock --max-steps 10
-```
-
-## Real mode
-Real mode now defaults to the official `piper-sdk` `C_PiperInterface_V2` client in [src/drivers/piper_driver.py](src/drivers/piper_driver.py).
-
-Typical flow:
-
-```bash
-source /home/leeviy/miniconda3/etc/profile.d/conda.sh
-conda activate PiperArm
-cd /home/leeviy/Desktop/PiperArm
 bash scripts/find_all_can_port.sh
-bash scripts/activate_can.sh can0 1000000
-bash scripts/check_can.sh can0
-python scripts/enable_robot.py --mode real
 ```
 
-## GUI tool
-The Linux GUI is an auxiliary manual-control tool. It uses the shared session layer and still sends all motion through [src/core/executor.py](src/core/executor.py) and [src/core/safety.py](src/core/safety.py); it does not replace the policy/VLA path.
+Example output:
 
-Install GUI dependencies:
+```text
+can0 bus=3-1.2:1.0 state=DOWN bitrate=unset
+```
+
+Activate CAN using the detected bus value:
 
 ```bash
-python -m pip install -e ".[gui,real]"
+bash scripts/activate_can.sh can0 1000000 3-1.2:1.0
 ```
 
-Start without hardware:
+Verify CAN:
+
+```bash
+bash scripts/check_can.sh can0
+```
+
+Only continue when `can0` is `UP` and bitrate is `1000000`.
+
+## Installation method 1: quick deployment
+
+Use this path for a fresh Linux machine or VM.
+
+```bash
+git clone git@github.com:PiperArm-EmbodiedAI/PiperControlPanel.git
+cd PiperArm
+bash scripts/install_system_deps.sh
+```
+
+Create and activate the conda environment:
+
+```bash
+conda env create -f environment.yml
+conda activate PiperArm
+```
+
+If the environment already exists, update it:
+
+```bash
+conda activate PiperArm
+conda env update -f environment.yml --prune
+```
+
+Launch mock GUI without hardware:
 
 ```bash
 bash scripts/launch_gui.sh mock
 ```
 
-Start with real hardware after CAN is active:
+Launch real GUI after CAN is initialized:
 
 ```bash
-bash scripts/activate_can.sh can0 1000000 3-1.2:1.0
+bash scripts/find_all_can_port.sh
+bash scripts/activate_can.sh can0 1000000 <detected-usb-bus>
+bash scripts/check_can.sh can0
 bash scripts/launch_gui.sh real
 ```
 
-## Demo scripts
-- [scripts/find_all_can_port.sh](scripts/find_all_can_port.sh)
-- [scripts/activate_can.sh](scripts/activate_can.sh)
-- [scripts/check_can.sh](scripts/check_can.sh)
-- [scripts/enable_robot.py](scripts/enable_robot.py)
-- [scripts/move_joint_demo.py](scripts/move_joint_demo.py)
-- [scripts/open_gripper.py](scripts/open_gripper.py)
-- [scripts/close_gripper.py](scripts/close_gripper.py)
-- [scripts/run_policy_loop.py](scripts/run_policy_loop.py)
-- [scripts/launch_gui.sh](scripts/launch_gui.sh)
-- [scripts/bootstrap_env.sh](scripts/bootstrap_env.sh)
-- [scripts/install_system_deps.sh](scripts/install_system_deps.sh)
+## Installation method 2: development / modified-code deployment
 
-## Migration to ROS2
-The core interfaces live in [src/core/](src/core/) and are intentionally ROS-agnostic. A later ROS2 Jazzy migration should add a bridge layer instead of rewriting the control unit.
+Use this path after changing code locally.
 
-## Current limitation
-The real driver in [src/drivers/piper_driver.py](src/drivers/piper_driver.py) already targets the official `C_PiperInterface_V2` API, but gripper travel defaults to a normalized-to-millimeter mapping that may need calibration on your hardware. Mock mode is fully runnable now.
+```bash
+cd PiperArm
+conda activate PiperArm
+python -m pip install --upgrade pip
+python -m pip install -e ".[gui,real,vision,dev]"
+```
+
+Run checks after code changes:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
+ruff check .
+python -m compileall src
+```
+
+Run the GUI from source:
+
+```bash
+bash scripts/launch_gui.sh mock
+bash scripts/launch_gui.sh real
+```
+
+You can also run the installed console entry point:
+
+```bash
+piper-gui --mode mock
+piper-gui --mode real
+```
+
+## GUI operation guide
+
+Recommended real-hardware order:
+
+1. Initialize CAN and run `check_can.sh`.
+2. Start the GUI with `bash scripts/launch_gui.sh real`.
+3. Click `Connect`.
+4. Confirm connected/enabled/error state feedback looks plausible.
+5. Click `Enable`.
+6. Start in Batch mode with small movements.
+7. Use Live mode only for small, deliberate posture debugging.
+8. Use `Disable motors` when finished.
+9. Closing the GUI is not an emergency stop. Use `Emergency stop` or `Disable motors` intentionally when needed.
+
+### Joint angle control
+
+The `Joint angle control` tab provides:
+
+- 6 joint target inputs in degrees.
+- 6 target sliders mapped to configured Piper joint limits.
+- Radian readout for internal values.
+- Gripper target input and open/close target buttons.
+- `Send target` for batch movement.
+- `Home target` for configured home pose.
+- `Undo pose` / `Redo pose` in Batch mode.
+
+All joint/gripper motion goes through [src/core/executor.py](src/core/executor.py) and [src/core/safety.py](src/core/safety.py).
+
+### Batch mode
+
+`Batch: edit then Send target` lets you edit joint angles, gripper values, or sliders before sending. Large moves are executed as multiple safe `max_delta` steps in the background. Undo/Redo records previously sent poses.
+
+### Live mode
+
+`Live: slider/value sends immediately` sends the latest target as you drag or edit values.
+
+Live mode display semantics:
+
+- Target spin boxes/sliders show the latest user command.
+- `Actual deg` shows real robot feedback.
+- `Error deg` shows target minus actual.
+- `Tracking` shows real position in blue and remaining target gap in red.
+- If you drag to 60 degrees and then back to 50 degrees before the arm catches up, the controller pursues the latest 50-degree target instead of queuing the old 60-degree target.
+- A persistent red gap can mean the robot is still catching up, the command is being clamped by `max_delta`, or CAN/feedback is delayed.
+
+### Cartesian pose control
+
+The `Cartesian pose control` tab displays realtime end-effector feedback when the driver provides it. For real Piper, feedback comes from `GetArmEndPoseMsgs()` and is displayed as:
+
+- X/Y/Z in millimeters.
+- RX/RY/RZ in degrees.
+
+Cartesian sending is experimental and disabled by default:
+
+```yaml
+robot:
+  gui:
+    experimental_cartesian_enabled: false
+```
+
+When enabled, Cartesian send uses Piper SDK MoveP / `EndPoseCtrl` units. Do not enable it until the safe workspace has been validated.
+
+### Master / Slave setup
+
+The `Master / Slave setup` tab is optional deployment tooling for Piper dual-arm teaching/linkage setups. It calls the official Piper SDK `MasterSlaveConfig` command.
+
+It is disabled by default:
+
+```yaml
+robot:
+  gui:
+    master_slave_config_enabled: false
+```
+
+When enabled, it can set the current arm as:
+
+- Master / teaching input arm: `linkage_config=0xFA`
+- Slave / motion output arm: `linkage_config=0xFC`
+
+Offsets default to zero:
+
+- feedback offset: `0x00`
+- control offset: `0x00`
+- linkage/address offset: `0x00`
+
+Advanced offset controls are hidden unless enabled:
+
+```yaml
+robot:
+  gui:
+    master_slave_advanced_offsets_enabled: true
+```
+
+Use non-zero offsets only when required by the official Piper deployment guide. Incorrect offsets can break command/feedback routing.
+
+## YAML configuration guide
+
+Main runtime configuration lives in [config/robot.yaml](config/robot.yaml).
+
+### Mode
+
+```yaml
+mode: mock
+```
+
+Use `mock` for no-hardware testing and `real` for Piper hardware. The launch script can also override mode:
+
+```bash
+bash scripts/launch_gui.sh mock
+bash scripts/launch_gui.sh real
+```
+
+Mock mode is intentionally kept because it lets users verify installation, GUI startup, tests, and control flow without a robot. It should not be treated as proof of real-hardware safety.
+
+### CAN and control rate
+
+```yaml
+robot:
+  can_interface: can0
+  auto_enable: false
+  control_rate_hz: 10.0
+  state_timeout_s: 1.0
+```
+
+Keep `auto_enable: false` for safety. Enable motors deliberately from the GUI.
+
+### Joint limits and max delta
+
+```yaml
+robot:
+  joint_limits:
+    min: [-2.6179, 0.0, -2.967, -1.745, -1.22, -2.09439]
+    max: [2.6179, 3.14, 0.0, 1.745, 1.22, 2.09439]
+  max_delta: [0.20, 0.20, 0.20, 0.20, 0.20, 0.20]
+```
+
+These values are safety-critical. `joint_limits` define slider ranges and safety clamps. `max_delta` limits how far one command can move each joint. Change them only after controlled review and real-hardware validation.
+
+### Home pose
+
+```yaml
+robot:
+  home_joint_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+```
+
+`Home target` moves to this configured joint pose through safe multi-step motion. Adjust it if your lab uses a different safe home posture.
+
+### Gripper
+
+```yaml
+robot:
+  gripper:
+    min: 0.0
+    max: 1.0
+    open: 1.0
+    closed: 0.0
+```
+
+The real driver maps normalized gripper values to Piper SDK millimeter units. Hardware calibration may be required for precise gripper travel.
+
+### Shutdown
+
+```yaml
+robot:
+  shutdown:
+    auto_disable: true
+    stop_on_exit: false
+```
+
+`auto_disable: true` disables motor holding torque during normal disconnect/close. `stop_on_exit: false` means closing the GUI is not treated as an emergency stop.
+
+### GUI options
+
+```yaml
+robot:
+  gui:
+    poll_rate_hz: 5.0
+    experimental_cartesian_enabled: false
+    master_slave_config_enabled: false
+    master_slave_advanced_offsets_enabled: false
+```
+
+- `poll_rate_hz`: GUI state refresh rate.
+- `experimental_cartesian_enabled`: enables Cartesian target sending.
+- `master_slave_config_enabled`: enables the Master/Slave setup Apply button.
+- `master_slave_advanced_offsets_enabled`: exposes advanced offset controls.
+
+## Project structure
+
+```text
+config/      Runtime YAML configuration
+scripts/     Installation, CAN, launch, and demo scripts
+src/app/     Shared session/factory/manual-control layer
+src/core/    Stable action/state/safety/executor/controller interfaces
+src/drivers/ Real Piper, mock, and camera drivers
+src/gui/     PySide6 GUI tool
+src/policies Mock and remote policy adapters
+tests/       Mock/safety/session regression tests
+```
+
+## Policy/VLA interface
+
+The GUI is an auxiliary manual tool. Future VLA or remote policy deployment should use:
+
+- [src/core/observation.py](src/core/observation.py)
+- [src/core/action.py](src/core/action.py)
+- [src/policies/base_policy.py](src/policies/base_policy.py)
+- [src/core/controller.py](src/core/controller.py)
+
+Do not couple future policy inference directly to GUI widgets.
+
+## Troubleshooting
+
+### GUI does not open over SSH
+
+Use an Ubuntu desktop terminal, VNC desktop, or SSH X11 forwarding:
+
+```bash
+ssh -X user@host
+```
+
+Headless smoke test only:
+
+```bash
+QT_QPA_PLATFORM=offscreen bash scripts/launch_gui.sh mock
+```
+
+### Qt xcb plugin error
+
+Install system GUI dependencies:
+
+```bash
+bash scripts/install_system_deps.sh
+```
+
+### CAN is down or bitrate is unset
+
+Run:
+
+```bash
+bash scripts/find_all_can_port.sh
+bash scripts/activate_can.sh can0 1000000 <detected-usb-bus>
+bash scripts/check_can.sh can0
+```
+
+### ROS apt GPG warning during apt update
+
+If `apt update` shows a ROS GPG warning but Ubuntu packages still install, it can usually be ignored for this project. The GUI requires Ubuntu Qt/xcb libraries, not ROS.
+
+## License
+
+Add your preferred license before public release.

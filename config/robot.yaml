@@ -4,11 +4,15 @@ robot:
   auto_enable: false
   control_rate_hz: 10.0
   state_timeout_s: 1.0
+  move_speed_rate: 50
+  # Physical calibration values; verify these against the installed flange and tool.
+  flange_to_tcp_translation_mm: [0.0, 0.0, 145.0]
+  flange_to_tcp_rpy_deg: [0.0, 0.0, 0.0]
   joint_limits:
     min: [-2.6179, 0.0, -2.967, -1.745, -1.22, -2.09439]
     max: [2.6179, 3.14, 0.0, 1.745, 1.22, 2.09439]
   max_delta: [0.20, 0.20, 0.20, 0.20, 0.20, 0.20]
-  home_joint_position: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  home_joint_position: [-1.5707963268, 1.0471975512, -1.0471975512, 0.0, 0.0, 0.0]
   gripper:
     min: 0.0
     max: 1.0
@@ -17,8 +21,14 @@ robot:
   shutdown:
     auto_disable: true
     stop_on_exit: false
+    park:
+      joint_position_deg: [-90.0, 0.0, 0.0, 0.0, 40.0, 0.0]
+      tolerance_deg: 2.0
+      stable_samples: 3
+      timeout_s: 45.0
+      poll_interval_s: 0.05
   gui:
     poll_rate_hz: 5.0
-    experimental_cartesian_enabled: false
+    experimental_cartesian_enabled: true
     master_slave_config_enabled: false
     master_slave_advanced_offsets_enabled: false
